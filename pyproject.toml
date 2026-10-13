@@ -1,0 +1,87 @@
+[project]
+name = "photocraft-midi"
+version = "0.1.0"
+description = "X-Touch Mini MIDI -> PhotoCraft MCP bridge"
+authors = [
+    {name = "shsmad", email = "shsmad@gmail.com"},
+]
+dependencies = [
+    "python-rtmidi>=1.5.8",
+    "python-dotenv>=1.0",
+]
+requires-python = ">=3.14"
+
+[tool.pdm]
+distribution = false
+
+[dependency-groups]
+dev = [
+    "ipdb>=0.13.13",
+    "ipython>=8.35.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.11.4",
+    "ty>=0.0.43",
+]
+
+[tool.pdm.scripts]
+_.env_file = ".env"
+lint = "ruff check src tests"
+typecheck = "ty check"
+test = "pytest"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: требует живого PhotoCraft/X-Touch (пропускается без env)",
+]
+
+[tool.ruff]
+target-version = "py314"
+exclude = [
+    ".tox",
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = [
+    "A003",
+    "D107",
+    "D202",
+    "D203",
+    "D401",
+]
+select = [
+    "A", # builtins
+    "B", # bugbear
+    "C4", # comprehensions
+    "COM", # commas
+    # "D",   # pydocstyle
+    "E", # pycodestyle
+    "F", # pyflakes
+    "I", # isort
+    "PT", # pytest-style
+    "S", # bandit
+    "SIM", # simplify
+    "T1", # debugger
+    "T2", # print
+    "UP", # pyupgrade
+    "W", # pycodestyle
+]
+# Avoid trying to fix flake8-bugbear (`B`) violations.
+unfixable = ["B"]
+
+[tool.ruff.lint.isort]
+lines-between-types = 1
+known-first-party = ["photocraftmidi"]
+known-local-folder = ["src"]
+force-single-line = false
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "PT011"]  # assert и широкий pytest.raises(ValueError) в тестах

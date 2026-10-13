@@ -1,0 +1,55 @@
+# AGENTS.md
+
+Прослойка на Python 3.14: слушает MIDI контроллера X-Touch Mini и управляет PhotoCraft через его MCP-сервер (прямой GIMP-аналог — см. ниже).
+
+## Эталоны и источники
+
+- GIMP-аналог (без MCP; у GIMP MIDI нативный): `../gimp-nanok2`. Рабочая MIDI-обвязка — `src/gimp-xtouch.py` (rtmidi, поиск порта по подстроке, LED-обратная связь). Оформление переносить оттуда.
+- Маппинг «MIDI CC → действие GIMP», который реально исполнялся: копия `controllerrc` (ControllerMidi, `controller-<CC>` → gimp-cmd) лежит в корне репо; оригинал — `~/.config/GIMP/3.2/controllerrc` (перезаписывается при каждом выходе GIMP, поэтому копия локальная — источник истины). Это дизайн-источник карты X-Touch → команды PhotoCraft, выжимка ниже.
+- Апстрим PhotoCraft: https://github.com/storytold/photocraft — описания `docs/mcp.md` (инструменты MCP) и `docs/control-protocol.md` (транспорт). Оперировать установленной версией 0.8.2.
+
+## PhotoCraft: бинарники и каналы управления
+
+- AppImage: `~/soft/artcraft/photocraft-0.8.2-linux-x86_64.AppImage`. Внутри образа (squashfs) `usr/bin/photocraft` (GUI) и `usr/bin/photocraft-cli` (CLI/MCP/serve). Отдельного `photocraft-cli` в PATH нет — брать из точки монтирования `/tmp/.mount_*/usr/bin/photocraft-cli` (имя точки меняется на каждом запуске, напр. `/tmp/.mount_photocNfBIii`) либо через `--appimage-extract`.
+- «Живой» мост требует запущенного GUI с контрольным портом: `photocraft --control <port> --control-token-file <путь>`. Без флагов канал выключен. То же задаётся в `~/.config/photocraft/preferences.json` (`controlPort`, `allowAgentControl: true`); лог — `~/.config/photocraft/logs/photocraft.log`.
+- MCP: `photocraft-cli mcp [--bridge 127.0.0.1:<port> --control-token-file <путь>] [--automation-read-root … --automation-write-root …]`. Стандартный MCP по stdio (JSON-RPC: initialize → initialized → tools.call). Без `--bridge` — headless-сессия движка (без окна); с `--bridge` инструменты пробрасываются в запущенный GUI и появляются UI-инструменты.
+- Инструменты MCP: `command_list`, `command_run {id, params?, wait?}`, `command_batch`, `doc_*` (`doc_new/doc_open/doc_inspect/doc_save/doc_render_preview/…`), `session_list`, `jobs_list/jobs_cancel`; в bridge-режиме ещё `ui_inspect/ui_screenshot/ui_pointer/ui_menu_invoke/ui_set/control_call`.
+- ID и параметры команд движка не угадывать: брать из `command_list {filter}` или `photocraft-cli commands [--filter …]` (у команд строгий `params`, лишний ключ — ошибка `-32602`). Проверенные реальные id: `file.new`, `layer.new.layer`, `layer.select`, `layer.setProps`, `layer.setExpanded`, `edit.undo`, `edit.redo`, `image.duplicate`, `history.newDocument`, `document.inspect`, `select.rect`, `paint.stroke`, `filter.blur.gaussianBlur`, `layer.newAdjustmentLayer.hueSaturation`, `ui.set {tool}`, `tools.setBrush`, `tools.setColors`.
+- Токен bearer-авторизует канал управления: при прямом TCP-общении с control-портом первый фрейм обязан быть `{"method":"auth",...}`. В bridge-режиме CLI аутентифицируется сам. Токен приватный (0600), не коммитить/не логировать; канал loopback-only.
+- Доступ к ФС fail-closed: без `--automation-read-root/--automation-write-root` файловое чтение/запись запрещены. Env-версии (`PHOTOCRAFT_AUTOMATION_*_ROOT`) действуют только для GUI; CLI требует флагов. Реплика `{id, ok, result|error}`; долгие команды — `wait:false` + `jobs_list` (клиентский таймаут 55 c против серверных 60 c).
+- Проверено на живом app 0.8.2: имена инструментов для `ui.set {tool}` — `brush`, `smudge`, `cloneStamp`, `healing` (не `healingBrush`!). Панели переключаются `ui.set {panels: {<key>: bool}}`, реальные ключи — `options_bar`, `brush_settings`, `navigator`, `color`, `layers`, `properties`… `ui.inspect` отдаёт `tool` (строка в PascalCase, напр. `"CloneStamp"`, `"Healing"`), `brush` = `{size, hardness, opacity}` и фактический зум в `views[0].zoom`. `ui.set {zoom: <фактор>}` работает; также доступны UI-команды `view.zoomIn/zoomOut/actualPixels/fitOnScreen` через `command_run` (в headless падают, работают только в bridge).
+
+## X-Touch Mini: MIDI-разметка
+
+- ВАЖНО: любые гипотезы о поведении и возможностях X-Touch Mini проверять ТОЛЬКО на реальном железе и во взаимодействии с пользователем (не по форумам/докам/аналогиям). Инструмент для экспериментов — `scripts/xtouch_probe.py` (мониторит входящие CC и шлёт CC на устройство), а также `python -m photocraftmidi --monitor`.
+- Библиотека `python-rtmidi` (как в эталоне). Linux ALSA-зависимости для сборки: `libasound2-dev libjack-jackd2-dev build-essential python3-dev` (`../gimp-nanok2/install.md`).
+- Порты rtmidi искать по подстроке `X-TOUCH MINI`, отдельно вход (MidiIn, события) и выход (MidiOut, LED). CC приходят на канале 11 (status `0xBA`/186); `msg[1]` = номер CC, `msg[2]` = значение.
+- Layer A (CC): [0-7] — кнопки энкодеров, [8-15] — 8 поворотных энкодеров, [16-23] и [24-31] — две нижние строки кнопок, 32 — фейдер. В controllerrc Layer B использует CC+32.
+- Энкодеры двух типов: CC 8–14 у устройства АБСОЛЮТНЫЕ (шлют позицию 0–127), CC 15 — ОТНОСИТЕЛЬНЫЙ (`relative2`: 65/63 = ±1, 67/69… = крупный +шаг, 61/59… = крупный −шаг, `FAST_STEP` = 5). Внутреннее значение абсолютного энкодера МОЖНО задать, отправив CC на его номер (проверено на живом устройстве: после `CC11=64` энкодер продолжил с 64) — этим пользуются кнопки 3-6. `midi.py` форвардит сырой CC; разбор в `main.py`. LED — строки 16-31; переключаемые LED — 21, 22, 29, 30.
+
+## Карта GIMP → команды PhotoCraft
+
+Из копии `controllerrc`, Layer A (CC → GIMP-действие, полный список см. в файле):
+003 view-rotate-reset · 004 context-brush-hardness-set · 005 tools-opacity-set-to-default · 006 view-zoom-1-1 · 007 tools-size-set-to-default · 011 view-rotate-set-absolute · 012 tools-hardness-set · 013 context-opacity-set · 014 view-zoom · 016 dialogs-tool-options · 017 edit-undo · 018 edit-redo · 019 context-dynamics-toggle · 020 layers-new-from-visible · 021 tools-paintbrush · 022 tools-smudge · 023 drawable-visible · 024 dialogs-dynamics · 028 image-resize-to-layers · 029 tools-clone · 030 tools-heal · 031 context-colors-swap.
+
+GIMP-имена ≠ id PhotoCraft: переводить их через `command_list` с фильтром (zoom/hardness/opacity/undo/redo/layer/select), искать по смыслу (панели, инструменты, слои).
+
+## Архитектура (реализовано)
+
+- `src/photocraftmidi/`: `midi.py` (порты rtmidi, приём сырых CC, LED, `--monitor`), `animations.py` (LED-анимации: `snake`/`blink_all`/`bounce`), `mapping.py` (загрузка/валидация `config.toml`), `mcp_client.py` (свой минимальный JSON-RPC поверх stdio `photocraft-cli mcp --bridge`), `main.py` + `__main__.py` (супервизор reconnect, asyncio-цикл, разбор энкодеров, синк).
+- Подключение: супервизор `BridgeApp.run` — ждёт MIDI (повторные попытки), затем bridge (во время ожидания, если MIDI открыт, крутится `bounce` по CC 16–23); при готовности — `blink_all` (16–31) + `snake` → рабочий цикл. При потере bridge — переподключение (backoff), при пропаже MIDI — переоткрытие порта. На старте не выходим, а ждём.
+- Энкодеры по умолчанию шлют команды сразу (без буфера); `buffer = true` в записи включает коалесценцию 40 мс с накоплением (сейчас — только BrushSize, CC 15).
+- Запуск: `launch-photocraft-midi.sh` (в репо) — `source .env` → если control-порт уже слушается, переиспользует запущенный PhotoCraft (GUI не стартует повторно), иначе стартует PhotoCraft с `--control` и ждёт порт → `pkill -f photocraftmidi` → `.venv/bin/python -m photocraftmidi` (выставляет `PYTHONPATH=src`). Напрямую: `PYTHONPATH=src .venv/bin/python -m photocraftmidi`.
+- `config.toml` (корень, коммитится как дефолт; оверрайд `PHOTOCRAFT_MIDI_CONFIG`): секции `[xtouch]` (`encoder_scheme`), `[layer_a.button]` (CC → `{kind, mcp, args, led, resets, inject}`), `[layer_a.encoder]` (absolute `{command, key, min, max, scale?}` либо steps `{incr, decr}`; у любого `buffer`), `[sync]` (`enabled`, `interval_ms`, `quiet_ms`), `[log]` (`path`, `level`, `max_bytes`, `backups`). У записей — комментарии `# gimp-nanok2: <действие controllerrc>`. Layer B вне v1.
+- Кнопки срабатывают на **любое** сообщение CC (X-Touch в toggle-режиме шлёт одно сообщение на нажатие, чередуя `127`/`0`). `kind = "momentary"` — одноразовое действие (значение игнорируется); `kind = "toggle"` — значение CC = целевое состояние (`127`=вкл, `0`=выкл), инъектится через `inject`; синк держит защёлку/LED кнопки в соответствии с состоянием приложения. `resets = { <encoder-key> = <value> }` выставляет счётчик абсолютного энкодера на устройстве в `inverse_map(value)` (CC на номер энкодера) и сбрасывает внутреннее значение приложения ровно к `value` — вращение продолжается от него без сдвига (кнопки 3-6).
+- Абсолютный энкодер: значение ведётся в приложении по дельтам от позиции (`map_absolute`/`inverse_map` в `main.py`, scale linear|log), поэтому сброс кнопкой даёт точное значение без скачка; `XTouchMidi.set_encoder` переставляет счётчик устройства (запас хода + LED-кольцо). Энкодер 15 (BrushSize) — относительный, `steps` (`increase/decreaseBrushSize`), кнопка 7 задаёт `size=20`.
+- Потокобезопасность: MIDI-колбэк rtmidi кладёт события в `asyncio.Queue` через `loop.call_soon_threadsafe` (не блокируем event loop и не вешаем выход).
+- `.env` (runtime, читается через `python-dotenv`; шаблон `.env.example`): `PHOTOCRAFT_CONTROL_PORT`, `PHOTOCRAFT_CONTROL_TOKEN_FILE`, опц. `PHOTOCRAFT_CLI`, `PHOTOCRAFT_APPIMAGE`, `PHOTOCRAFT_MIDI_CONFIG`, `PHOTOCRAFT_MIDI_LOG`.
+- Логирование: stderr + `RotatingFileHandler` по пути из `[log].path` (по умолчанию `photocraft-midi.log` в текущем каталоге); уровень — `[log].level`, env `PHOTOCRAFT_MIDI_LOG` переопределяет.
+- Фоновая синхронизация (`[sync]`, по умолчанию 1 Гц): встроена в цикл как таймаут ожидания — при простое `_sync_once` опрашивает `ui_inspect` и зеркалит в X-Touch — tool-группу (21/22/29/30), счётчики rotation/zoom/hardness/opacity (CC 11-14 через `set_encoder`), undo/redo (17/18 из `document.canUndo/canRedo`), панели (16→`options_bar`, 19/24→`brush_settings`), видимость слоя (23 из `document.layers[activeLayer].visible`). `quiet_ms` не даёт синку мешать активному контролу; ошибки опроса — лог + пропуск. Push-уведомлений в канале нет — только поллинг.
+
+## Разработка
+
+- Оформление как в `../gimp-nanok2`: `pyproject.toml` (pdm), layout `src/`, ruff (line-length 120, isort), `pdm run lint` = `ruff check src tests`. Тайпчекинг — `ty` (dev-зависимость `ty>=0.0.43`), `pdm run typecheck` = `ty check`. Тесты — `pytest` + `pytest-asyncio`, `pdm run test` = `pytest` (`tests/`, маркер `integration` пропускается без env). Python 3.14 из `/usr/bin/python3.14`.
+- Runtime-зависимости: `python-rtmidi`, `python-dotenv`. `ty` ругается на отсутствие стабов `rtmidi` — строки доступа помечены `# type: ignore` (в т.ч. в `scripts/xtouch_probe.py`).
+- CI: `.github/workflows/ci.yml` — ubuntu, Python 3.14, `pdm install -G dev` → lint → typecheck → test. Репозиторий: `README.md`, `LICENSE` (MIT), `.gitignore`; `scripts/xtouch_probe.py` — диагностика MIDI на реальном железе.

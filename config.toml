@@ -1,0 +1,101 @@
+# Карта X-Touch Mini (Layer A) -> PhotoCraft.
+# Комментарии "# gimp-nanok2: <action>" = назначение кода (CC) в эталоне
+# (../gimp-nanok2 + ~/.config/GIMP/3.2/controllerrc). Layer B вне v1.
+#
+# Схемы записей:
+#   [layer_a.button]  cc = { kind: momentary|toggle, mcp: <инструмент>, args: {...},
+#                            led: bool|"undo"|"redo"|"tool:<имя>"|"layer.visible",
+#                            resets: { "<encoder-key>" = <value> },
+#                            inject: "<имя параметра>" }
+#   resets -> выставляет счётчик соответствующего абсолютного энкодера на устройстве
+#   (CC на номер энкодера), чтобы вращение продолжалось от этого значения.
+#   kind = "momentary" -> срабатывает ВСЕГДА (любое значение CC: 127 или 0) — для
+#   одноразовых действий и кнопок в toggle-режиме (одно сообщение на нажатие, 127/0).
+#   kind = "toggle"    -> срабатывает по нажатию (value>0) и переключает состояние
+#   (см. inject/led).
+#   [layer_a.encoder] cc = absolute: { command: {mcp, args}, key, min, max, scale?, buffer? }
+#                        | steps:    { incr: {mcp,args}, decr: {mcp,args}, buffer? }
+#   absolute: значение ведётся в приложении по дельтам (map 0..127 -> min..max, scale linear|log);
+#   кнопка выставляет счётчик энкодера на устройстве через `resets` и сбрасывает значение ровно к value.
+#   steps: относительный энкодер, вызывает incr/decr (без состояния).
+# buffer = true -> события копятся в окне 40 мс; по умолчанию false.
+# mcp: command_run | ui_set | ui_inspect | command_list (имена MCP-инструментов).
+#
+# [sync] — фоновая синхронизация состояния PhotoCraft -> X-Touch (опрос ui_inspect):
+#   enabled       — вкл/выкл;
+#   interval_ms   — период опроса;
+#   quiet_ms      — контрол, тронутый за это время, синк не трогает (не мешать вращению).
+#
+# [log] — логирование (stderr + файл с ротацией):
+#   path          — путь к файлу (по умолчанию в текущем каталоге);
+#   level         — DEBUG | INFO | WARNING | ERROR (env PHOTOCRAFT_MIDI_LOG переопределяет);
+#   max_bytes/backups — параметры RotatingFileHandler.
+
+[xtouch]
+encoder_scheme = "relative2"  # relative1: decr=127,incr=1 | relative2: decr=63,incr=65 | relative3: decr=65,incr=1
+
+[sync]
+enabled = true
+interval_ms = 1000
+quiet_ms = 500
+
+[log]
+path = "photocraft-midi.log"
+level = "INFO"
+max_bytes = 1_000_000
+backups = 3
+
+[layer_a.button]
+# --- кнопки энкодеров (CC 0-7): "set to value" + сброс внутреннего значения энкодера ---
+# gimp-nanok2: view-rotate-reset
+3 = { kind = "momentary", mcp = "ui_set", args = { fields = { rotation = 0 } }, led = false, resets = { rotation = 0 } }
+# gimp-nanok2: context-brush-hardness-set (100%)
+4 = { kind = "momentary", mcp = "command_run", args = { id = "tools.setBrush", params = { hardness = 1.0 } }, led = false, resets = { hardness = 1.0 } }
+# gimp-nanok2: tools-opacity-set-to-default
+5 = { kind = "momentary", mcp = "command_run", args = { id = "tools.setBrush", params = { opacity = 1.0 } }, led = false, resets = { opacity = 1.0 } }
+# gimp-nanok2: view-zoom-1-1 (100%)
+6 = { kind = "momentary", mcp = "ui_set", args = { fields = { zoom = 1.0 } }, led = false, resets = { zoom = 1.0 } }
+# gimp-nanok2: tools-size-set-to-default
+7 = { kind = "momentary", mcp = "command_run", args = { id = "tools.setBrush", params = { size = 20 } }, led = false }
+# --- строка 1 (CC 16-23) ---
+# gimp-nanok2: dialogs-tool-options (панель options_bar)
+16 = { kind = "toggle", mcp = "ui_set", args = { fields = { panels = { options_bar = true } } }, led = true, inject = "panels.options_bar" }
+# gimp-nanok2: edit-undo
+17 = { kind = "momentary", mcp = "command_run", args = { id = "edit.undo", params = {} }, led = "undo" }
+# gimp-nanok2: edit-redo
+18 = { kind = "momentary", mcp = "command_run", args = { id = "edit.redo", params = {} }, led = "redo" }
+# gimp-nanok2: context-dynamics-toggle (панель brush_settings)
+19 = { kind = "toggle", mcp = "ui_set", args = { fields = { panels = { brush_settings = true } } }, led = true, inject = "panels.brush_settings" }
+# gimp-nanok2: layers-new-from-visible
+20 = { kind = "momentary", mcp = "command_run", args = { id = "layer.stampVisible", params = {} }, led = false }
+# gimp-nanok2: tools-paintbrush
+21 = { kind = "toggle", mcp = "ui_set", args = { fields = { tool = "brush" } }, led = "tool:brush" }
+# gimp-nanok2: tools-smudge
+22 = { kind = "toggle", mcp = "ui_set", args = { fields = { tool = "smudge" } }, led = "tool:smudge" }
+# gimp-nanok2: drawable-visible (LED: внутренний toggle, invert в param)
+23 = { kind = "toggle", mcp = "command_run", args = { id = "layer.setProps", params = {} }, led = "layer.visible", inject = "visible" }
+# gimp-nanok2: dialogs-dynamics (панель brush_settings)
+# --- строка 2 (CC 24-31) ---
+24 = { kind = "toggle", mcp = "ui_set", args = { fields = { panels = { brush_settings = true } } }, led = true, inject = "panels.brush_settings" }
+# gimp-nanok2: image-resize-to-layers (приблизительно: image.trim прозрачных краёв)
+28 = { kind = "momentary", mcp = "command_run", args = { id = "image.trim", params = { basedOn = "transparent" } }, led = false }
+# gimp-nanok2: tools-clone
+29 = { kind = "toggle", mcp = "ui_set", args = { fields = { tool = "cloneStamp" } }, led = "tool:cloneStamp" }
+# gimp-nanok2: tools-heal
+30 = { kind = "toggle", mcp = "ui_set", args = { fields = { tool = "healing" } }, led = "tool:healing" }
+# gimp-nanok2: context-colors-swap (одноразовое: срабатывает на каждое сообщение)
+31 = { kind = "momentary", mcp = "command_run", args = { id = "tools.swapColors", params = {} }, led = false }
+
+[layer_a.encoder]
+# CC 8, 9, 10 — свободны (в GIMP пустые).
+# absolute: кнопки 3-6 выставляют счётчик энкодера на устройстве (resets).
+# gimp-nanok2: view-rotate-set-absolute
+11 = { command = { mcp = "ui_set", args = { fields = { rotation = 0 } } }, key = "rotation", min = -180, max = 180 }
+# gimp-nanok2: tools-hardness-set
+12 = { command = { mcp = "command_run", args = { id = "tools.setBrush", params = { hardness = 0 } } }, key = "hardness", min = 0, max = 1 }
+# gimp-nanok2: context-opacity-set
+13 = { command = { mcp = "command_run", args = { id = "tools.setBrush", params = { opacity = 0 } } }, key = "opacity", min = 0, max = 1 }
+# gimp-nanok2: view-zoom (log-шкала 0.1..16)
+14 = { command = { mcp = "ui_set", args = { fields = { zoom = 0 } } }, key = "zoom", min = 0.1, max = 16, scale = "log" }
+# gimp-nanok2: BrushSize (устройство относительное — шаговые команды; кнопка 7 задаёт size=20)
+15 = { incr = { mcp = "command_run", args = { id = "tools.increaseBrushSize", params = {} } }, decr = { mcp = "command_run", args = { id = "tools.decreaseBrushSize", params = {} } }, buffer = true }
