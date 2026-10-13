@@ -39,9 +39,10 @@ class FakeMidi:
 class FakeClient:
     """Заглушка MCPClient: записывает вызовы, отдаёт заданный ui_inspect."""
 
-    def __init__(self, ui: dict | None = None) -> None:
+    def __init__(self, ui: dict | None = None, brush: dict | None = None) -> None:
         self.calls: list[tuple] = []
         self._ui = ui or {}
+        self._brush = brush
 
     @property
     def connected(self) -> bool:
@@ -50,8 +51,11 @@ class FakeClient:
     async def ui_set(self, fields: dict) -> None:
         self.calls.append(("ui_set", fields))
 
-    async def command_run(self, command_id: str, params: dict | None = None) -> None:
+    async def command_run(self, command_id: str, params: dict | None = None) -> dict | None:
         self.calls.append(("command_run", command_id, params))
+        if command_id == "brush.get":
+            return self._brush
+        return None
 
     async def ui_inspect(self) -> dict:
         return self._ui
@@ -75,7 +79,7 @@ def _make_button(cc: int, **kwargs: object) -> ButtonSpec:
         "inject": None,
     }
     fields.update(kwargs)
-    return ButtonSpec(cc=cc, **fields)  # type: ignore[arg-type]
+    return ButtonSpec(cc=cc, **fields)  # type: ignore  # kwargs-сборка полей
 
 
 def _make_encoder(cc: int, **kwargs: object) -> EncoderSpec:

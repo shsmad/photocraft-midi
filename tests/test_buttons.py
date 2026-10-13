@@ -130,3 +130,64 @@ async def test_absolute_encoder_tracks_deltas(fake_midi: Any, fake_client: Any) 
     await app._handle_encoder(11, 65)
     second = fake_client.calls[-1]
     assert round(second[1]["rotation"] - first[1]["rotation"], 2) == round(360 / 127, 2)
+
+
+async def test_toggle_hardness_states(fake_midi: Any, fake_client: Any) -> None:
+    enc = EncoderSpec(
+        cc=12,
+        mode="absolute",
+        command=Action("command_run", {"id": "tools.setBrush", "params": {}}),
+        key="hardness",
+        min=0.0,
+        max=1.0,
+    )
+    mapping = _mapping(
+        {
+            4: _btn(
+                4,
+                kind="toggle",
+                action=Action("command_run", {"id": "tools.setBrush", "params": {}}),
+                states={127: 1.0, 0: 0.25},
+                inject="hardness",
+                resets={"hardness": 1.0},
+            ),
+        },
+        encoders={12: enc},
+    )
+    app = _app(fake_midi, fake_client, mapping)
+    await app._handle_button(4, 127)
+    assert ("command_run", "tools.setBrush", {"hardness": 1.0}) in fake_client.calls
+    assert (12, 127) in fake_midi.encoder  # 100% -> raw 127
+    fake_client.calls.clear()
+    fake_midi.encoder.clear()
+    await app._handle_button(4, 0)
+    assert ("command_run", "tools.setBrush", {"hardness": 0.25}) in fake_client.calls
+    assert (12, 32) in fake_midi.encoder  # 25% -> raw 32 (как в эталоне)
+
+
+async def test_toggle_transfer_opacity_states(fake_midi: Any, fake_client: Any) -> None:
+    mapping = _mapping(
+        {
+            27: _btn(
+                27,
+                kind="toggle",
+                action=Action("command_run", {"id": "tools.setBrush", "params": {"reset": False}}),
+                states={127: "penPressure", 0: "off"},
+                inject="transfer.opacity.control",
+            ),
+        },
+    )
+    app = _app(fake_midi, fake_client, mapping)
+    await app._handle_button(27, 127)
+    assert (
+        "command_run",
+        "tools.setBrush",
+        {"reset": False, "transfer": {"opacity": {"control": "penPressure"}}},
+    ) in fake_client.calls
+    fake_client.calls.clear()
+    await app._handle_button(27, 0)
+    assert (
+        "command_run",
+        "tools.setBrush",
+        {"reset": False, "transfer": {"opacity": {"control": "off"}}},
+    ) in fake_client.calls

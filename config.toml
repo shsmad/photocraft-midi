@@ -4,11 +4,15 @@
 #
 # Схемы записей:
 #   [layer_a.button]  cc = { kind: momentary|toggle, mcp: <инструмент>, args: {...},
-#                            led: bool|"undo"|"redo"|"tool:<имя>"|"layer.visible",
+#                            led: bool|"undo"|"redo"|"tool:<имя>"|"layer.visible"|"brush.transfer.opacity",
 #                            resets: { "<encoder-key>" = <value> },
-#                            inject: "<имя параметра>" }
+#                            inject: "<имя параметра>",
+#                            states: { <CC-значение> = <целевое> } }
 #   resets -> выставляет счётчик соответствующего абсолютного энкодера на устройстве
 #   (CC на номер энкодера), чтобы вращение продолжалось от этого значения.
+#   states -> карта «значение CC -> целевое значение, инъектимое в inject»
+#   (по умолчанию 127=вкл/0=выкл); сброс энкодера, если ключ resets совпадает с inject,
+#   использует это же целевое значение.
 #   kind = "momentary" -> срабатывает ВСЕГДА (любое значение CC: 127 или 0) — для
 #   одноразовых действий и кнопок в toggle-режиме (одно сообщение на нажатие, 127/0).
 #   kind = "toggle"    -> срабатывает по нажатию (value>0) и переключает состояние
@@ -49,8 +53,8 @@ backups = 3
 # --- кнопки энкодеров (CC 0-7): "set to value" + сброс внутреннего значения энкодера ---
 # gimp-nanok2: view-rotate-reset
 3 = { kind = "momentary", mcp = "ui_set", args = { fields = { rotation = 0 } }, led = false, resets = { rotation = 0 } }
-# gimp-nanok2: context-brush-hardness-set (100%)
-4 = { kind = "momentary", mcp = "command_run", args = { id = "tools.setBrush", params = { hardness = 1.0 } }, led = false, resets = { hardness = 1.0 } }
+# gimp-nanok2: context-brush-hardness-set (цикл 100% / 25% по значению CC: 127/0)
+4 = { kind = "toggle", mcp = "command_run", args = { id = "tools.setBrush", params = { hardness = 1.0 } }, led = false, resets = { hardness = 1.0 }, states = { 127 = 1.0, 0 = 0.25 }, inject = "hardness" }
 # gimp-nanok2: tools-opacity-set-to-default
 5 = { kind = "momentary", mcp = "command_run", args = { id = "tools.setBrush", params = { opacity = 1.0 } }, led = false, resets = { opacity = 1.0 } }
 # gimp-nanok2: view-zoom-1-1 (100%)
@@ -77,6 +81,8 @@ backups = 3
 # gimp-nanok2: dialogs-dynamics (панель brush_settings)
 # --- строка 2 (CC 24-31) ---
 24 = { kind = "toggle", mcp = "ui_set", args = { fields = { panels = { brush_settings = true } } }, led = true, inject = "panels.brush_settings" }
+# gimp-nanok2: dialogs-dynamics (здесь — "Transfer: opacity from pressure", не диалог)
+27 = { kind = "toggle", mcp = "command_run", args = { id = "tools.setBrush", params = { reset = false } }, led = "brush.transfer.opacity", states = { 127 = "penPressure", 0 = "off" }, inject = "transfer.opacity.control" }
 # gimp-nanok2: image-resize-to-layers (приблизительно: image.trim прозрачных краёв)
 28 = { kind = "momentary", mcp = "command_run", args = { id = "image.trim", params = { basedOn = "transparent" } }, led = false }
 # gimp-nanok2: tools-clone
@@ -98,4 +104,4 @@ backups = 3
 # gimp-nanok2: view-zoom (log-шкала 0.1..16)
 14 = { command = { mcp = "ui_set", args = { fields = { zoom = 0 } } }, key = "zoom", min = 0.1, max = 16, scale = "log" }
 # gimp-nanok2: BrushSize (устройство относительное — шаговые команды; кнопка 7 задаёт size=20)
-15 = { incr = { mcp = "command_run", args = { id = "tools.increaseBrushSize", params = {} } }, decr = { mcp = "command_run", args = { id = "tools.decreaseBrushSize", params = {} } }, buffer = true }
+15 = { incr = { mcp = "command_run", args = { id = "tools.increaseBrushSize", params = {} } }, decr = { mcp = "command_run", args = { id = "tools.decreaseBrushSize", params = {} } } }

@@ -88,3 +88,41 @@ def test_sync_skips_document_when_absent(fake_midi: Any, fake_client: Any) -> No
     ui = {"tool": "Brush", "panels": {}, "document": None}
     app._apply_led(23, ui)  # слой нет документа -> LED не трогаем
     assert fake_midi.led == []
+
+
+def _app_with_brush_led(fake_midi: Any, fake_client: Any) -> BridgeApp:
+    mapping = Mapping(
+        buttons={
+            27: ButtonSpec(
+                cc=27,
+                kind="toggle",
+                action=Action("command_run", {"id": "tools.setBrush", "params": {}}),
+                led="brush.transfer.opacity",
+                resets={},
+                inject="transfer.opacity.control",
+            ),
+        },
+        encoders={},
+        encoder_scheme="relative2",
+        sync=SyncSpec(),
+        log=LogSpec(),
+    )
+    return BridgeApp(fake_midi, fake_client, mapping)
+
+
+async def test_sync_once_led_brush_transfer_opacity(fake_midi: Any, fake_client: Any) -> None:
+    fake_client._brush = {"transfer": {"opacity": {"control": "penPressure"}}}
+    app = _app_with_brush_led(fake_midi, fake_client)
+    await app._sync_once()
+    assert (27, True) in fake_midi.led
+    fake_client._brush = {"transfer": {"opacity": {"control": "off"}}}
+    fake_midi.led.clear()
+    await app._sync_once()
+    assert (27, False) in fake_midi.led
+
+
+async def test_refresh_led_brush_transfer_opacity(fake_midi: Any, fake_client: Any) -> None:
+    fake_client._brush = {"transfer": {"opacity": {"control": "penPressure"}}}
+    app = _app_with_brush_led(fake_midi, fake_client)
+    await app._handle_button(27, 0)
+    assert (27, True) in fake_midi.led  # LED по реальному состоянию, а не по нажатию

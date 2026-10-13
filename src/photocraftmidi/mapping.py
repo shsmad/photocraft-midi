@@ -36,6 +36,7 @@ class ButtonSpec:
     led: bool | str
     resets: dict[str, float]
     inject: str | None
+    states: dict[int, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,15 @@ def _parse_buttons(cc: int, raw: dict[str, Any]) -> ButtonSpec:
     inject = raw.get("inject")
     if inject is not None and not isinstance(inject, str):
         raise ValueError(f"CC {cc}: `inject` должен быть строкой")
+    states_raw = raw.get("states")
+    states: dict[int, Any] | None = None
+    if states_raw is not None:
+        if not isinstance(states_raw, dict):
+            raise ValueError(f"CC {cc}: `states` должен быть таблицей {{CC-значение = целевое}}")
+        try:
+            states = {int(k): v for k, v in states_raw.items()}
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"CC {cc}: ключи `states` должны быть числами") from exc
     return ButtonSpec(
         cc=cc,
         kind=kind,
@@ -114,6 +124,7 @@ def _parse_buttons(cc: int, raw: dict[str, Any]) -> ButtonSpec:
         led=led,
         resets={k: float(v) for k, v in resets.items()},
         inject=inject,
+        states=states,
     )
 
 

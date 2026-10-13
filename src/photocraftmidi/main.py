@@ -27,9 +27,10 @@ from .midi import XTouchMidi
 
 logger = logging.getLogger("photocraftmidi")
 COALESCE_SECONDS = 0.040  # окно коалесценции событий энкодера
-FAST_STEP = 5  # во сколько раз крупнее шаг быстрого поворота относительного энкодера
+FAST_STEP = 2  # во сколько раз крупнее шаг быстрого поворота относительного энкодера
 EPSILON_REL = 1e-3  # порог сравнения float при синке (доля диапазона)
 RETRY_SECONDS = 2.0  # пауза между попытками переподключения MIDI/bridge
+LED_BRUSH_TRANSFER_OPACITY = "brush.transfer.opacity"  # led: opacity кисти "from pressure"
 
 
 def _close(a: float, b: float, min_v: float, max_v: float) -> bool:
@@ -77,6 +78,8 @@ class BridgeApp:
         self._sync = mapping.sync
         self._states: dict[str, EncoderState] = {}
         self._mirror: dict[str, Any] = {}
+        self._led_brush: dict[str, Any] | None = None
+        self._last_snapshot: dict[str, Any] | None = None
         self._last_touch: dict[int, float] = {}
         self._enc_buffer: dict[int, int] = {}
         self._enc_tasks: dict[int, asyncio.Task[None]] = {}
@@ -102,7 +105,9 @@ class BridgeApp:
                 await self._wait_for_bridge()
                 await animations.blink_all(self._midi)
                 await animations.snake(self._midi)
+                self._last_snapshot = None  # новое подключение — заново логируем первое состояние
                 try:
+                    await self._sync_once()  # первое состояние: опрос + логирование + LED/счётчики
                     await self._event_loop(events)
                 except McpConnectionError:
                     logger.warning("bridge потерян — переподключаюсь")
@@ -168,15 +173,18 @@ class BridgeApp:
             logger.debug("кнопка вне карты: CC %d", cc)
             return
         logger.info("кнопка CC=%d (%s) '%s' value=%d", cc, spec.kind, spec.led, value)
-        for key, reset_value in spec.resets.items():
-            self._reset_encoder(key, reset_value)
         arguments = copy.deepcopy(spec.action.args)
+        mapped: Any | None = None
         if spec.inject is not None:
-            # кнопка в toggle-режиме: значение CC и есть целевое состояние (127=вкл, 0=выкл),
-            # а синк держит её защёлку/LED в соответствии с состоянием приложения.
-            target = value > 0
+            # значение CC и есть целевое состояние: `states` задаёт карту значения -> целевое,
+            # иначе 127=вкл / 0=выкл; синк держит защёлку/LED в соответствии с приложением.
+            target: Any = spec.states.get(value, value > 0) if spec.states else (value > 0)
+            mapped = target
             logger.debug("CC=%d inject=%s value=%d -> target=%s", cc, spec.inject, value, target)
-            _inject_toggle(arguments, spec.action.mcp, spec.inject, target)
+            _inject_value(arguments, spec.action.mcp, spec.inject, target)
+        for key, reset_value in spec.resets.items():
+            use = mapped if (mapped is not None and key == spec.inject) else reset_value
+            self._reset_encoder(key, float(use))
         try:
             await self._call_action(spec.action, arguments)
         except McpConnectionError:
@@ -331,6 +339,16 @@ class BridgeApp:
             return
         if isinstance(ui, dict):
             self._mirror = ui
+        if spec.led == LED_BRUSH_TRANSFER_OPACITY:
+            try:
+                brush_raw = await self._client.command_run("brush.get")
+            except McpConnectionError:
+                raise
+            except McpError as exc:
+                logger.warning("LED refresh: brush.get: %s", exc)
+            else:
+                if isinstance(brush_raw, dict):
+                    self._led_brush = brush_raw
         if isinstance(spec.led, str) and spec.led.startswith("tool:"):
             self._apply_tool_group(ui, force=True)
         else:
@@ -347,11 +365,63 @@ class BridgeApp:
             return
         if not isinstance(ui, dict):
             return
+        brush_full: dict[str, Any] | None = None
+        if any(spec.led == LED_BRUSH_TRANSFER_OPACITY for spec in self._mapping.buttons.values()):
+            try:
+                brush_raw = await self._client.command_run("brush.get")
+            except McpConnectionError:
+                raise
+            except McpError as exc:
+                logger.warning("синк: brush.get не удался: %s", exc)
+            else:
+                brush_full = brush_raw if isinstance(brush_raw, dict) else None
+        self._led_brush = brush_full
         self._mirror = ui
+        self._log_state(ui, brush_full)
         self._sync_encoders(ui)
         self._apply_tool_group(ui)
         for cc in self._mapping.buttons:
             self._apply_led(cc, ui)
+
+    def _log_state(self, ui: dict[str, Any], brush_full: dict[str, Any] | None = None) -> None:
+        """Залогировать состояние, влияющее на X-Touch: полное при первом чтении, далее — изменения."""
+        snapshot = self._snapshot(ui, brush_full)
+        if self._last_snapshot is None:
+            logger.info("первое состояние: %s", snapshot)
+        else:
+            changes = {k: v for k, v in snapshot.items() if self._last_snapshot.get(k) != v}
+            if changes:
+                logger.info("состояние изменилось: %s", changes)
+        self._last_snapshot = snapshot
+
+    def _snapshot(self, ui: dict[str, Any], brush_full: dict[str, Any] | None = None) -> dict[str, Any]:
+        views_raw = ui.get("views")
+        views = views_raw if isinstance(views_raw, list) else []
+        view_raw = views[0] if views else {}
+        view: dict[str, Any] = view_raw if isinstance(view_raw, dict) else {}
+        brush_raw = ui.get("brush")
+        brush: dict[str, Any] = brush_raw if isinstance(brush_raw, dict) else {}
+        doc_raw = ui.get("document")
+        doc: dict[str, Any] = doc_raw if isinstance(doc_raw, dict) else {}
+        panels_raw = ui.get("panels")
+        panels: dict[str, Any] = panels_raw if isinstance(panels_raw, dict) else {}
+
+        def r(value: Any, nd: int) -> Any:
+            return round(value, nd) if isinstance(value, int | float) else value
+
+        return {
+            "tool": ui.get("tool"),
+            "rotation": r(view.get("rotation"), 2),
+            "zoom": r(view.get("zoom"), 3),
+            "hardness": r(brush.get("hardness"), 4),
+            "opacity": r(brush.get("opacity"), 4),
+            "size": r(brush.get("size"), 2),
+            "canUndo": doc.get("canUndo"),
+            "canRedo": doc.get("canRedo"),
+            "layer_visible": self._active_layer_visible(ui),
+            "transferOpacity": self._brush_opacity_from_pressure(brush_full),
+            "panels": panels,
+        }
 
     def _sync_encoders(self, ui: dict[str, Any]) -> None:
         """Подтянуть счётчики/значения энкодеров под реальное состояние app."""
@@ -410,7 +480,24 @@ class BridgeApp:
             field = "canUndo" if led == "undo" else "canRedo"
             if isinstance(doc, dict):
                 self._midi.set_led(cc, bool(doc.get(field)))
+        elif led == LED_BRUSH_TRANSFER_OPACITY:
+            state = self._brush_opacity_from_pressure(self._led_brush)
+            if state is not None:
+                self._midi.set_led(cc, state)
         # led вида "tool:*" обрабатывается _apply_tool_group
+
+    @staticmethod
+    def _brush_opacity_from_pressure(brush: object) -> bool | None:
+        """Горит ли LED кнопки: opacity кисти управляется давлением (transfer.opacity.control)."""
+        if not isinstance(brush, dict):
+            return None
+        transfer = brush.get("transfer")
+        if not isinstance(transfer, dict):
+            return None
+        opacity = transfer.get("opacity")
+        if not isinstance(opacity, dict) or "control" not in opacity:
+            return None
+        return opacity["control"] == "penPressure"
 
     def _read_toggle(self, ui: dict[str, Any], inject: str) -> bool | None:
         """Реальное состояние тоггла из ui_inspect, либо None, если источник недоступен."""
@@ -442,24 +529,14 @@ class BridgeApp:
         return (asyncio.get_running_loop().time() - last) * 1000.0 < self._sync.quiet_ms
 
 
-def _inject_value(args: dict[str, Any], mcp: str, key: str, value: float) -> dict[str, Any]:
-    if mcp == "ui_set":
-        args.setdefault("fields", {})[key] = value
-    elif mcp == "command_run":
-        args.setdefault("params", {})[key] = value
-    else:
-        raise ValueError(f"инъекция значения не поддерживается для mcp={mcp!r}")
-    return args
-
-
-def _inject_toggle(args: dict[str, Any], mcp: str, path: str, value: bool) -> dict[str, Any]:
-    """Записать булево по пути (поддерживает вложенность, напр. `panels.options_bar`)."""
+def _inject_value(args: dict[str, Any], mcp: str, path: str, value: Any) -> dict[str, Any]:
+    """Записать значение по пути (поддерживает вложенность, напр. `panels.options_bar`)."""
     if mcp == "ui_set":
         root = args.setdefault("fields", {})
     elif mcp == "command_run":
         root = args.setdefault("params", {})
     else:
-        raise ValueError(f"инъекция toggle не поддерживается для mcp={mcp!r}")
+        raise ValueError(f"инъекция значения не поддерживается для mcp={mcp!r}")
     parts = path.split(".")
     node = root
     for part in parts[:-1]:

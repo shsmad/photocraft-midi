@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import pytest
 
-from photocraftmidi.main import decode_relative, inverse_map, map_absolute
+from photocraftmidi.main import FAST_STEP, decode_relative, inverse_map, map_absolute
 
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(65, 1), (63, -1), (67, 5), (69, 5), (61, -5), (59, -5), (64, 0), (0, -5), (127, 5)],
+    [
+        (65, 1),
+        (63, -1),
+        (67, FAST_STEP),
+        (69, FAST_STEP),
+        (61, -FAST_STEP),
+        (59, -FAST_STEP),
+        (64, 0),
+        (0, -FAST_STEP),
+        (127, FAST_STEP),
+    ],
 )
 def test_decode_relative2(value: int, expected: int) -> None:
     assert decode_relative(value, "relative2") == expected
