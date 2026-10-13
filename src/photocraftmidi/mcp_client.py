@@ -1,7 +1,7 @@
 """Минимальный MCP-клиент (JSON-RPC 2.0) поверх stdio `photocraft-cli mcp --bridge`.
 
-Аутентификацию токеном берёт на себя сам CLI; здесь только handshake
-andериализация инструментов: initialize -> notifications/initialized -> tools/call.
+Аутентификацию токеном берёт на себя сам CLI; здесь — handshake и сериализация
+инструментов: initialize -> notifications/initialized -> tools/call.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ INITIALIZE_TIMEOUT = 15.0
 CALL_TIMEOUT = 20.0
 # Клиентский таймаут ниже серверного (55 c bridge против 60 c desktop), чтобы
 # ошибка бриджа была видна клиенту, а не серверу.
+STREAM_LIMIT = 4 * 1024 * 1024  # лимит строки stdout: ответы command_list бывают >>64 КиБ
 
 
 class McpError(Exception):
@@ -92,6 +93,7 @@ class MCPClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            limit=STREAM_LIMIT,
         )
         self._reader = asyncio.create_task(self._read_loop())
         try:
@@ -162,6 +164,10 @@ class MCPClient:
         if params is not None:
             arguments["params"] = params
         return await self.tool("command_run", arguments)
+
+    async def command_batch(self, steps: list[dict[str, Any]]) -> Any:
+        """Запустить несколько команд движка одним вызовом (меньше round-trip'ов)."""
+        return await self.tool("command_batch", {"steps": steps})
 
     async def ui_set(self, fields: dict[str, Any]) -> Any:
         return await self.tool("ui_set", {"fields": fields})

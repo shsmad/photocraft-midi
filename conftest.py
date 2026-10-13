@@ -57,6 +57,10 @@ class FakeClient:
             return self._brush
         return None
 
+    async def command_batch(self, steps: list[dict]) -> dict:
+        self.calls.append(("command_batch", steps))
+        return {"completed": len(steps), "failed": 0, "results": []}
+
     async def ui_inspect(self) -> dict:
         return self._ui
 

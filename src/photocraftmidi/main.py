@@ -306,6 +306,22 @@ class BridgeApp:
             raise RuntimeError(f"CC {cc}: steps-энкодер без incr/decr")
         steps = abs(deltas)
         logger.info("encoder CC=%d шаговая команда x%d", cc, steps)
+        if action.mcp == "command_run" and steps > 1:
+            # одна сетевая поездка вместо N: команды одинаковые, порядок сохраняется
+            step: dict[str, Any] = {"id": action.args["id"]}
+            if action.args.get("params") is not None:
+                step["params"] = action.args["params"]
+            try:
+                result = await self._client.command_batch([step] * steps)
+            except McpConnectionError:
+                raise
+            except McpError as exc:
+                logger.warning("encoder CC=%d: %s", cc, exc)
+                return
+            failed = result.get("failed") if isinstance(result, dict) else None
+            if failed:
+                logger.warning("encoder CC=%d: часть шагов не удалась (%s)", cc, failed)
+            return
         for _ in range(steps):
             try:
                 await self._call_action(action, copy.deepcopy(action.args))
@@ -341,19 +357,24 @@ class BridgeApp:
         if isinstance(ui, dict):
             self._mirror = ui
         if spec.led == LED_BRUSH_TRANSFER_OPACITY:
-            try:
-                brush_raw = await self._client.command_run("brush.get")
-            except McpConnectionError:
-                raise
-            except McpError as exc:
-                logger.warning("LED refresh: brush.get: %s", exc)
-            else:
-                if isinstance(brush_raw, dict):
-                    self._led_brush = brush_raw
+            brush = await self._fetch_brush("LED refresh")
+            if brush is not None:
+                self._led_brush = brush
         if isinstance(spec.led, str) and spec.led.startswith("tool:"):
             self._apply_tool_group(ui, force=True)
         else:
             self._apply_led(cc, ui, force=True)
+
+    async def _fetch_brush(self, context: str) -> dict[str, Any] | None:
+        """Прочитать полную модель кисти (`brush.get`) — не входит в ui_inspect."""
+        try:
+            brush_raw = await self._client.command_run("brush.get")
+        except McpConnectionError:
+            raise
+        except McpError as exc:
+            logger.warning("%s: brush.get: %s", context, exc)
+            return None
+        return brush_raw if isinstance(brush_raw, dict) else None
 
     async def _sync_once(self) -> None:
         """Один опрос ui_inspect и зеркалирование состояния в X-Touch."""
@@ -368,14 +389,7 @@ class BridgeApp:
             return
         brush_full: dict[str, Any] | None = None
         if any(spec.led == LED_BRUSH_TRANSFER_OPACITY for spec in self._mapping.buttons.values()):
-            try:
-                brush_raw = await self._client.command_run("brush.get")
-            except McpConnectionError:
-                raise
-            except McpError as exc:
-                logger.warning("синк: brush.get не удался: %s", exc)
-            else:
-                brush_full = brush_raw if isinstance(brush_raw, dict) else None
+            brush_full = await self._fetch_brush("синк")
         self._led_brush = brush_full
         self._mirror = ui
         self._log_state(ui, brush_full)
@@ -396,12 +410,8 @@ class BridgeApp:
         self._last_snapshot = snapshot
 
     def _snapshot(self, ui: dict[str, Any], brush_full: dict[str, Any] | None = None) -> dict[str, Any]:
-        views_raw = ui.get("views")
-        views = views_raw if isinstance(views_raw, list) else []
-        view_raw = views[0] if views else {}
-        view: dict[str, Any] = view_raw if isinstance(view_raw, dict) else {}
-        brush_raw = ui.get("brush")
-        brush: dict[str, Any] = brush_raw if isinstance(brush_raw, dict) else {}
+        view = self._view0(ui)
+        brush = self._ui_brush(ui)
         doc_raw = ui.get("document")
         doc: dict[str, Any] = doc_raw if isinstance(doc_raw, dict) else {}
         panels_raw = ui.get("panels")
@@ -426,12 +436,8 @@ class BridgeApp:
 
     def _sync_encoders(self, ui: dict[str, Any]) -> None:
         """Подтянуть счётчики/значения энкодеров под реальное состояние app."""
-        views_raw = ui.get("views")
-        views = views_raw if isinstance(views_raw, list) else []
-        view_raw = views[0] if views else {}
-        view: dict[str, Any] = view_raw if isinstance(view_raw, dict) else {}
-        brush_raw = ui.get("brush")
-        brush: dict[str, Any] = brush_raw if isinstance(brush_raw, dict) else {}
+        view = self._view0(ui)
+        brush = self._ui_brush(ui)
         sources = {
             "rotation": view.get("rotation"),
             "zoom": view.get("zoom"),
@@ -515,27 +521,38 @@ class BridgeApp:
         return None
 
     @staticmethod
-    def _active_layer_visible(ui: dict[str, Any]) -> bool | None:
+    def _active_layer(ui: dict[str, Any]) -> dict[str, Any] | None:
         doc = ui.get("document")
         if not isinstance(doc, dict):
             return None
         active = doc.get("activeLayer")
         for layer in doc.get("layers") or []:
             if isinstance(layer, dict) and layer.get("id") == active:
-                return bool(layer.get("visible", True))
+                return layer
         return None
 
-    @staticmethod
-    def _active_layer_prop(ui: dict[str, Any], field: str) -> Any:
+    @classmethod
+    def _active_layer_visible(cls, ui: dict[str, Any]) -> bool | None:
+        layer = cls._active_layer(ui)
+        return None if layer is None else bool(layer.get("visible", True))
+
+    @classmethod
+    def _active_layer_prop(cls, ui: dict[str, Any], field: str) -> Any:
         """Значение поля активного слоя из ui_inspect (opacity/fill), либо None."""
-        doc = ui.get("document")
-        if not isinstance(doc, dict):
-            return None
-        active = doc.get("activeLayer")
-        for layer in doc.get("layers") or []:
-            if isinstance(layer, dict) and layer.get("id") == active:
-                return layer.get(field)
-        return None
+        layer = cls._active_layer(ui)
+        return None if layer is None else layer.get(field)
+
+    @staticmethod
+    def _view0(ui: dict[str, Any]) -> dict[str, Any]:
+        views = ui.get("views")
+        views = views if isinstance(views, list) else []
+        first = views[0] if views else {}
+        return first if isinstance(first, dict) else {}
+
+    @staticmethod
+    def _ui_brush(ui: dict[str, Any]) -> dict[str, Any]:
+        brush = ui.get("brush")
+        return brush if isinstance(brush, dict) else {}
 
     def _is_quiet(self, cc: int) -> bool:
         last = self._last_touch.get(cc)

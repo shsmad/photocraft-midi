@@ -246,3 +246,33 @@ async def test_absolute_encoder_injects_param_not_key(fake_midi: Any, fake_clien
     assert calls
     assert set(calls[-1][2].keys()) == {"opacity"}  # внутренний key не утекает в команду
     assert abs(calls[-1][2]["opacity"] - 0.748) < 0.01
+
+
+async def test_steps_encoder_batches_fast_turn(fake_midi: Any, fake_client: Any) -> None:
+    enc = EncoderSpec(
+        cc=15,
+        mode="steps",
+        incr=Action("command_run", {"id": "tools.increaseBrushSize", "params": {}}),
+        decr=Action("command_run", {"id": "tools.decreaseBrushSize", "params": {}}),
+    )
+    mapping = _mapping({}, encoders={15: enc})
+    app = _app(fake_midi, fake_client, mapping)
+    await app._handle_encoder(15, 67)  # relative2, быстрый шаг: +FAST_STEP = 2
+    batched = [c for c in fake_client.calls if c[0] == "command_batch"]
+    assert len(batched) == 1
+    assert batched[0][1] == [{"id": "tools.increaseBrushSize", "params": {}}] * 2
+    assert not [c for c in fake_client.calls if c[0] == "command_run"]
+
+
+async def test_steps_encoder_single_step_not_batched(fake_midi: Any, fake_client: Any) -> None:
+    enc = EncoderSpec(
+        cc=15,
+        mode="steps",
+        incr=Action("command_run", {"id": "tools.increaseBrushSize", "params": {}}),
+        decr=Action("command_run", {"id": "tools.decreaseBrushSize", "params": {}}),
+    )
+    mapping = _mapping({}, encoders={15: enc})
+    app = _app(fake_midi, fake_client, mapping)
+    await app._handle_encoder(15, 65)  # relative2, медленный шаг: +1
+    assert ("command_run", "tools.increaseBrushSize", {}) in fake_client.calls
+    assert not [c for c in fake_client.calls if c[0] == "command_batch"]
