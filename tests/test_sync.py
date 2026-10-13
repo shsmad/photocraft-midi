@@ -72,6 +72,20 @@ def test_sync_encoders(fake_midi: Any, fake_client: Any) -> None:
     assert (13, 32) in fake_midi.encoder  # opacity 0.25 -> 32
 
 
+def test_sync_layer_opacity_encoder(fake_midi: Any, fake_client: Any) -> None:
+    mapping = Mapping(
+        buttons={},
+        encoders={10: _enc(10, "layer_opacity", 0, 1)},
+        encoder_scheme="relative2",
+        sync=SyncSpec(),
+        log=LogSpec(),
+    )
+    app = BridgeApp(fake_midi, fake_client, mapping)
+    ui = {"document": {"activeLayer": 2, "layers": [{"id": 2, "opacity": 0.5, "fill": 0.8}]}}
+    app._sync_encoders(ui)
+    assert (10, 64) in fake_midi.encoder  # opacity 0.5 -> raw 64
+
+
 def test_sync_leds(fake_midi: Any, fake_client: Any) -> None:
     app = _app(fake_midi, fake_client)
     app._apply_tool_group(UI)

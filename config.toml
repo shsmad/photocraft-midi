@@ -17,9 +17,10 @@
 #   одноразовых действий и кнопок в toggle-режиме (одно сообщение на нажатие, 127/0).
 #   kind = "toggle"    -> срабатывает по нажатию (value>0) и переключает состояние
 #   (см. inject/led).
-#   [layer_a.encoder] cc = absolute: { command: {mcp, args}, key, min, max, scale?, buffer? }
+#   [layer_a.encoder] cc = absolute: { command: {mcp, args}, key, param?, min, max, scale?, buffer? }
 #                        | steps:    { incr: {mcp,args}, decr: {mcp,args}, buffer? }
 #   absolute: значение ведётся в приложении по дельтам (map 0..127 -> min..max, scale linear|log);
+#   key — внутреннее имя значения (для resets/синка), param — имя параметра команды (по умолчанию = key).
 #   кнопка выставляет счётчик энкодера на устройстве через `resets` и сбрасывает значение ровно к value.
 #   steps: относительный энкодер, вызывает incr/decr (без состояния).
 # buffer = true -> события копятся в окне 40 мс; по умолчанию false.
@@ -51,6 +52,8 @@ backups = 3
 
 [layer_a.button]
 # --- кнопки энкодеров (CC 0-7): "set to value" + сброс внутреннего значения энкодера ---
+# gimp-nanok2: (нет; opacity активного слоя: 0 -> 25%, 127 -> 100%)
+2 = { kind = "toggle", mcp = "command_run", args = { id = "layer.setProps", params = { opacity = 1.0 } }, led = false, resets = { layer_opacity = 1.0 }, states = { 127 = 1.0, 0 = 0.25 }, inject = "opacity" }
 # gimp-nanok2: view-rotate-reset
 3 = { kind = "momentary", mcp = "ui_set", args = { fields = { rotation = 0 } }, led = false, resets = { rotation = 0 } }
 # gimp-nanok2: context-brush-hardness-set (цикл 100% / 25% по значению CC: 127/0)
@@ -93,7 +96,9 @@ backups = 3
 31 = { kind = "momentary", mcp = "command_run", args = { id = "tools.swapColors", params = {} }, led = false }
 
 [layer_a.encoder]
-# CC 8, 9, 10 — свободны (в GIMP пустые).
+# CC 8, 9 — свободны (в GIMP пустые).
+# gimp-nanok2: (нет; opacity активного слоя 0..1 = 0..100%; кнопка 2 задаёт 25%/100%)
+10 = { command = { mcp = "command_run", args = { id = "layer.setProps", params = { opacity = 1.0 } } }, key = "layer_opacity", param = "opacity", min = 0, max = 1 }
 # absolute: кнопки 3-6 выставляют счётчик энкодера на устройстве (resets).
 # gimp-nanok2: view-rotate-set-absolute
 11 = { command = { mcp = "ui_set", args = { fields = { rotation = 0 } } }, key = "rotation", min = -180, max = 180 }

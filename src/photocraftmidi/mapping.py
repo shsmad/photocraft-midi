@@ -48,6 +48,7 @@ class EncoderSpec:
     decr: Action | None = None
     command: Action | None = None
     key: str | None = None
+    param: str | None = None  # имя параметра команды (по умолчанию = key)
     min: float = 0.0
     max: float = 1.0
     scale: str = "linear"
@@ -144,7 +145,10 @@ def _parse_encoder(cc: int, raw: dict[str, Any]) -> EncoderSpec:
         command = _parse_action(raw["command"])
         key = raw.get("key")
         if not isinstance(key, str):
-            raise ValueError(f"CC {cc}: для `command` нужен `key` (имя параметра для инъекции)")
+            raise ValueError(f"CC {cc}: для `command` нужен `key` (внутреннее имя значения)")
+        param = raw.get("param", key)
+        if not isinstance(param, str):
+            raise ValueError(f"CC {cc}: `param` должен быть строкой")
         try:
             min_v, max_v = float(raw.get("min", 0.0)), float(raw.get("max", 1.0))
         except (TypeError, ValueError) as exc:
@@ -153,7 +157,7 @@ def _parse_encoder(cc: int, raw: dict[str, Any]) -> EncoderSpec:
         if scale not in ("linear", "log"):
             raise ValueError(f"CC {cc}: scale={scale!r}, ждём linear|log")
         return EncoderSpec(
-            cc=cc, mode="absolute", buffer=buffer, command=command, key=key,
+            cc=cc, mode="absolute", buffer=buffer, command=command, key=key, param=param,
             min=min_v, max=max_v, scale=scale,
         )
 

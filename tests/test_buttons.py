@@ -191,3 +191,58 @@ async def test_toggle_transfer_opacity_states(fake_midi: Any, fake_client: Any) 
         "tools.setBrush",
         {"reset": False, "transfer": {"opacity": {"control": "off"}}},
     ) in fake_client.calls
+
+
+async def test_button_layer_opacity_states(fake_midi: Any, fake_client: Any) -> None:
+    enc = EncoderSpec(
+        cc=10,
+        mode="absolute",
+        command=Action("command_run", {"id": "layer.setProps", "params": {"opacity": 1.0}}),
+        key="layer_opacity",
+        min=0.0,
+        max=1.0,
+    )
+    mapping = _mapping(
+        {
+            2: _btn(
+                2,
+                kind="toggle",
+                action=Action("command_run", {"id": "layer.setProps", "params": {"opacity": 1.0}}),
+                states={127: 1.0, 0: 0.25},
+                inject="opacity",
+                resets={"layer_opacity": 1.0},
+            ),
+        },
+        encoders={10: enc},
+    )
+    app = _app(fake_midi, fake_client, mapping)
+    await app._handle_button(2, 0)
+    assert ("command_run", "layer.setProps", {"opacity": 0.25}) in fake_client.calls
+    assert (10, 32) in fake_midi.encoder  # 25% -> raw 32
+    fake_client.calls.clear()
+    fake_midi.encoder.clear()
+    await app._handle_button(2, 127)
+    assert ("command_run", "layer.setProps", {"opacity": 1.0}) in fake_client.calls
+    assert (10, 127) in fake_midi.encoder  # 100% -> raw 127
+
+
+async def test_absolute_encoder_injects_param_not_key(fake_midi: Any, fake_client: Any) -> None:
+    enc = EncoderSpec(
+        cc=10,
+        mode="absolute",
+        command=Action("command_run", {"id": "layer.setProps", "params": {"opacity": 1.0}}),
+        key="layer_opacity",
+        param="opacity",
+        min=0.0,
+        max=1.0,
+    )
+    mapping = _mapping({}, encoders={10: enc})
+    app = _app(fake_midi, fake_client, mapping)
+    await app._handle_encoder(10, 127)  # инициализация позиции -> opacity 1.0
+    assert ("command_run", "layer.setProps", {"opacity": 1.0}) in fake_client.calls
+    fake_client.calls.clear()
+    await app._handle_encoder(10, 95)  # -32 -> ~0.748
+    calls = [c for c in fake_client.calls if c[1] == "layer.setProps"]
+    assert calls
+    assert set(calls[-1][2].keys()) == {"opacity"}  # внутренний key не утекает в команду
+    assert abs(calls[-1][2]["opacity"] - 0.748) < 0.01

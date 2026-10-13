@@ -183,7 +183,8 @@ class BridgeApp:
             logger.debug("CC=%d inject=%s value=%d -> target=%s", cc, spec.inject, value, target)
             _inject_value(arguments, spec.action.mcp, spec.inject, target)
         for key, reset_value in spec.resets.items():
-            use = mapped if (mapped is not None and key == spec.inject) else reset_value
+            # при наличии `states` кнопка ставит энкодеру именно целевое значение из карты
+            use = mapped if (mapped is not None and (key == spec.inject or spec.states is not None)) else reset_value
             self._reset_encoder(key, float(use))
         try:
             await self._call_action(spec.action, arguments)
@@ -288,7 +289,7 @@ class BridgeApp:
             return
         value = state.value
         logger.info("encoder CC=%d %s -> %.4f", cc, spec.key, value)
-        arguments = _inject_value(copy.deepcopy(spec.command.args), spec.command.mcp, spec.key, value)
+        arguments = _inject_value(copy.deepcopy(spec.command.args), spec.command.mcp, spec.param or spec.key, value)
         try:
             await self._call_action(spec.command, arguments)
         except McpConnectionError:
@@ -436,6 +437,8 @@ class BridgeApp:
             "zoom": view.get("zoom"),
             "hardness": brush.get("hardness"),
             "opacity": brush.get("opacity"),
+            "layer_opacity": self._active_layer_prop(ui, "opacity"),
+            "layer_fill": self._active_layer_prop(ui, "fill"),
         }
         for key, enc in self._encoders_by_key.items():
             if enc.mode != "absolute" or enc.key is None:
@@ -520,6 +523,18 @@ class BridgeApp:
         for layer in doc.get("layers") or []:
             if isinstance(layer, dict) and layer.get("id") == active:
                 return bool(layer.get("visible", True))
+        return None
+
+    @staticmethod
+    def _active_layer_prop(ui: dict[str, Any], field: str) -> Any:
+        """Значение поля активного слоя из ui_inspect (opacity/fill), либо None."""
+        doc = ui.get("document")
+        if not isinstance(doc, dict):
+            return None
+        active = doc.get("activeLayer")
+        for layer in doc.get("layers") or []:
+            if isinstance(layer, dict) and layer.get("id") == active:
+                return layer.get(field)
         return None
 
     def _is_quiet(self, cc: int) -> bool:
